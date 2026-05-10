@@ -51,9 +51,6 @@ static NSString *MATAdTypeDes(NSString *placementId, NSString * _Nullable errorM
             [[MaticooAds shareSDK] setIsAgeRestrictedUser:childDirected.boolValue];
         }
 
-        // CCPA
-        [self applyCCPASettings];
-
         [[MaticooAds shareSDK] setMediationName:@"admob"];
         [[MaticooAds shareSDK] initSDK:appkey onSuccess:^{
             completionHandler(nil);
@@ -64,12 +61,12 @@ static NSString *MATAdTypeDes(NSString *placementId, NSString * _Nullable errorM
 }
 
 + (GADVersionNumber)adSDKVersion {
-  GADVersionNumber version = {2,0,0};
+  GADVersionNumber version = {2, 1, 0};
   return version;
 }
 
 + (GADVersionNumber)adapterVersion {
-    GADVersionNumber version = {2,0,0};
+    GADVersionNumber version = {2, 1, 0};
     return version;
 }
 
@@ -81,7 +78,6 @@ static NSString *MATAdTypeDes(NSString *placementId, NSString * _Nullable errorM
             (GADMediationInterstitialAdConfiguration *)adConfiguration
                          completionHandler:
                              (GADMediationInterstitialLoadCompletionHandler)completionHandler {
-    [MaticooCustomEventInterstitial applyCCPASettings];
 
     __block atomic_flag completionHandlerCalled = ATOMIC_FLAG_INIT;
     __block GADMediationInterstitialLoadCompletionHandler originalCompletionHandler =
@@ -122,17 +118,6 @@ static NSString *MATAdTypeDes(NSString *placementId, NSString * _Nullable errorM
     } else {
         [_interstitial loadAd];
     }
-}
-
-+ (void)applyCCPASettings {
-    BOOL rdpDidSet = [NSUserDefaults.standardUserDefaults objectForKey:@"gad_rdp"];
-    NSString *uspString = [NSUserDefaults.standardUserDefaults stringForKey:@"IABUSPrivacy_String"];
-    if (!rdpDidSet && uspString.length < 3) {
-        return;
-    }
-    BOOL rdpEnabled = [NSUserDefaults.standardUserDefaults boolForKey:@"gad_rdp"];
-    BOOL optOut = (rdpDidSet && rdpEnabled) || (uspString.length >= 3 && [uspString characterAtIndex:2] == 'Y');
-    [[MaticooAds shareSDK] setDoNotTrackStatus:optOut];
 }
 
 #pragma mark GADMediationInterstitialAd implementation
