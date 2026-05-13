@@ -86,29 +86,21 @@ static NSString *MATAdTypeDes(NSString *placementId, NSString * _Nullable errorM
     };
 
     NSString *adUnit = adConfiguration.credentials.settings[@"parameter"];
-    if (adUnit == nil) {
-        [[MaticooAds shareSDK] adapterEventReportWithEventName:@"adapter_load_failed" des:MATAdTypeDes(adUnit, @"placement id is null")];
+    if (![adUnit isKindOfClass:[NSString class]] || adUnit.length == 0) {
+        [[MaticooAds shareSDK] adapterEventReportWithEventName:@"adapter_load_failed" des:MATAdTypeDes(nil, @"placement id is null or invalid type")];
         NSError *error = [NSError errorWithDomain:@"com.google.zmaticoo" code:100 userInfo:[NSDictionary dictionaryWithObject:@"zmaticoo placement id is null" forKey:@"reason"]];
-        _loadCompletionHandler(nil, error);
+        if (_loadCompletionHandler) {
+            _loadCompletionHandler(nil, error);
+        }
         return;
     }
     _placementId = adUnit;
     [[MaticooAds shareSDK] adapterEventReportWithEventName:@"adapter_load" des:MATAdTypeDes(_placementId, nil)];
-    _rewarded = [[MATRewardedVideoAd alloc] initWithPlacementID:adUnit];
-    _rewarded.delegate = self;
-    id extras = adConfiguration.extras;
-    if (extras != nil && [extras isKindOfClass:[MaticooCustomExtras class]]) {
-        id localExtra = ((MaticooCustomExtras *)extras).localExtra;
-        if ([localExtra isKindOfClass:[NSDictionary class]]) {
-            [_rewarded loadAdExtraMap:(NSDictionary *)localExtra];
-        } else if ([localExtra isKindOfClass:[NSString class]] && [(NSString *)localExtra length] > 0) {
-            [_rewarded loadAd:(NSString *)localExtra];
-        } else {
-            [_rewarded loadAd];
-        }
-    } else {
-        [_rewarded loadAd];
-    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self->_rewarded = [[MATRewardedVideoAd alloc] initWithPlacementID:adUnit];
+        self->_rewarded.delegate = self;
+        [self->_rewarded loadAd];
+    });
 }
 
 #pragma mark - GADMediationRewardedAd
@@ -129,13 +121,17 @@ static NSString *MATAdTypeDes(NSString *placementId, NSString * _Nullable errorM
 - (void)rewardedVideoAdDidLoad:(MATRewardedVideoAd *)rewardedVideoAd {
     (void)rewardedVideoAd;
     [[MaticooAds shareSDK] adapterEventReportWithEventName:@"adapter_load_success" des:MATAdTypeDes(_placementId, nil)];
-    _adEventDelegate = _loadCompletionHandler(self, nil);
+    if (_loadCompletionHandler) {
+        _adEventDelegate = _loadCompletionHandler(self, nil);
+    }
 }
 
 - (void)rewardedVideoAd:(MATRewardedVideoAd *)rewardedVideoAd didFailWithError:(NSError *)error {
     (void)rewardedVideoAd;
     [[MaticooAds shareSDK] adapterEventReportWithEventName:@"adapter_load_failed" des:MATAdTypeDes(_placementId, error.localizedDescription)];
-    _adEventDelegate = _loadCompletionHandler(nil, error);
+    if (_loadCompletionHandler) {
+        _loadCompletionHandler(nil, error);
+    }
 }
 
 - (void)rewardedVideoAd:(MATRewardedVideoAd *)rewardedVideoAd displayFailWithError:(NSError *)error {

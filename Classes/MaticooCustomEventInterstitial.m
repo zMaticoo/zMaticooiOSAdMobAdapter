@@ -102,22 +102,21 @@ static NSString *MATAdTypeDes(NSString *placementId, NSString * _Nullable errorM
                                                                               return delegate;
                                                                           };
     NSString *adUnit = adConfiguration.credentials.settings[@"parameter"];
-    if (adUnit == nil){
-        [[MaticooAds shareSDK] adapterEventReportWithEventName:@"adapter_load_failed" des:MATAdTypeDes(adUnit, @"placement id is null")];
+    if (![adUnit isKindOfClass:[NSString class]] || adUnit.length == 0){
+        [[MaticooAds shareSDK] adapterEventReportWithEventName:@"adapter_load_failed" des:MATAdTypeDes(nil, @"placement id is null or invalid type")];
         NSError *error= [NSError errorWithDomain:@"com.google.zmaticoo" code:100 userInfo:[NSDictionary dictionaryWithObject:@"zmaticoo placement id is null" forKey:@"reason"]];
-        _loadCompletionHandler(nil, error);
+        if (_loadCompletionHandler) {
+            _loadCompletionHandler(nil, error);
+        }
         return;
     }
     _placementId = adUnit;
     [[MaticooAds shareSDK] adapterEventReportWithEventName:@"adapter_load" des:MATAdTypeDes(_placementId, nil)];
-    _interstitial = [[MATInterstitialAd alloc] initWithPlacementID:adUnit];
-    _interstitial.delegate = self;
-    id extras = adConfiguration.extras;
-    if (extras != nil && [extras isKindOfClass:[MaticooCustomExtras class]]){
-        [_interstitial loadAd:((MaticooCustomExtras *)extras).localExtra];
-    } else {
-        [_interstitial loadAd];
-    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        self->_interstitial = [[MATInterstitialAd alloc] initWithPlacementID:adUnit];
+        self->_interstitial.delegate = self;
+        [self->_interstitial loadAd];
+    });
 }
 
 #pragma mark GADMediationInterstitialAd implementation
@@ -138,12 +137,16 @@ static NSString *MATAdTypeDes(NSString *placementId, NSString * _Nullable errorM
 
 - (void)interstitialAdDidLoad:(MATInterstitialAd *)interstitialAd{
     [[MaticooAds shareSDK] adapterEventReportWithEventName:@"adapter_load_success" des:MATAdTypeDes(_placementId, nil)];
-    _adEventDelegate = _loadCompletionHandler(self, nil);
+    if (_loadCompletionHandler) {
+        _adEventDelegate = _loadCompletionHandler(self, nil);
+    }
 }
 
 - (void)interstitialAd:(MATInterstitialAd *)interstitialAd didFailWithError:(NSError *)error{
     [[MaticooAds shareSDK] adapterEventReportWithEventName:@"adapter_load_failed" des:MATAdTypeDes(_placementId, error.localizedDescription)];
-    _adEventDelegate = _loadCompletionHandler(nil, error);
+    if (_loadCompletionHandler) {
+        _loadCompletionHandler(nil, error);
+    }
 }
 
 - (void)interstitialAdWillLogImpression:(MATInterstitialAd *)interstitialAd{

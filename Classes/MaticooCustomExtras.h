@@ -13,7 +13,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 @interface MaticooCustomExtras : NSObject<GADAdNetworkExtras>
 
-@property(nonatomic) NSDictionary * localExtra;
+@property(copy, nonatomic) NSDictionary * localExtra;
 
 @end
 

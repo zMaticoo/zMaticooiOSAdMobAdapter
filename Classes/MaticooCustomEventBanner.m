@@ -104,10 +104,12 @@ static NSString *MATAdTypeDes(NSString *placementId, NSString * _Nullable errorM
     };
 
     NSString *adUnit = adConfiguration.credentials.settings[@"parameter"];
-    if (adUnit == nil) {
-        [[MaticooAds shareSDK] adapterEventReportWithEventName:@"adapter_load_failed" des:MATAdTypeDes(adUnit, @"placement id is null")];
+    if (![adUnit isKindOfClass:[NSString class]] || adUnit.length == 0) {
+        [[MaticooAds shareSDK] adapterEventReportWithEventName:@"adapter_load_failed" des:MATAdTypeDes(nil, @"placement id is null or invalid type")];
         NSError *error = [NSError errorWithDomain:@"com.google.zmaticoo" code:100 userInfo:[NSDictionary dictionaryWithObject:@"zmaticoo placement id is null" forKey:@"reason"]];
-        _loadCompletionHandler(nil, error);
+        if (_loadCompletionHandler) {
+            _loadCompletionHandler(nil, error);
+        }
         return;
     }
     _placementId = adUnit;
@@ -121,12 +123,17 @@ static NSString *MATAdTypeDes(NSString *placementId, NSString * _Nullable errorM
                                            adConfiguration.adSize.size.height);
 
         id extras = adConfiguration.extras;
-        if (extras != nil && [extras isKindOfClass:[MaticooCustomExtras class]]) {
-            self->_bannerAd.localExtra = ((MaticooCustomExtras *)extras).localExtra;
-            NSString *biddingRequestId = [((MaticooCustomExtras *)extras).localExtra objectForKey:@"biddingRequestId"];
-            if ([biddingRequestId isKindOfClass:[NSString class]] && biddingRequestId.length > 0) {
-                [self->_bannerAd loadAd:biddingRequestId];
-                return;
+        if ([extras isKindOfClass:[MaticooCustomExtras class]]) {
+            id le = ((MaticooCustomExtras *)extras).localExtra;
+            NSDictionary *localExtra = [le isKindOfClass:[NSDictionary class]] ? le : nil;
+            if (localExtra) {
+                self->_bannerAd.localExtra = localExtra;
+                id canCloseObj = localExtra[@"can_close_ad"];
+                if ([canCloseObj isKindOfClass:[NSNumber class]]) {
+                    self->_bannerAd.canCloseAd = [(NSNumber *)canCloseObj boolValue];
+                } else if ([canCloseObj isKindOfClass:[NSString class]]) {
+                    self->_bannerAd.canCloseAd = [(NSString *)canCloseObj boolValue];
+                }
             }
         }
         [self->_bannerAd loadAd];
@@ -136,6 +143,10 @@ static NSString *MATAdTypeDes(NSString *placementId, NSString * _Nullable errorM
 #pragma mark - GADMediationBannerAd
 
 - (nonnull UIView *)view {
+    if (_bannerAd == nil) {
+        UIView *bannerAdNilView = [[UIView alloc] init];
+        return bannerAdNilView;
+    }
     return _bannerAd;
 }
 
@@ -143,12 +154,16 @@ static NSString *MATAdTypeDes(NSString *placementId, NSString * _Nullable errorM
 
 - (void)bannerAdDidLoad:(MATBannerAd *)bannerAd {
     [[MaticooAds shareSDK] adapterEventReportWithEventName:@"adapter_load_success" des:MATAdTypeDes(_placementId, nil)];
-    _adEventDelegate = _loadCompletionHandler(self, nil);
+    if (_loadCompletionHandler) {
+        _adEventDelegate = _loadCompletionHandler(self, nil);
+    }
 }
 
 - (void)bannerAd:(MATBannerAd *)bannerAd didFailWithError:(NSError *)error {
     [[MaticooAds shareSDK] adapterEventReportWithEventName:@"adapter_load_failed" des:MATAdTypeDes(_placementId, error.localizedDescription)];
-    _adEventDelegate = _loadCompletionHandler(nil, error);
+    if (_loadCompletionHandler) {
+        _loadCompletionHandler(nil, error);
+    }
 }
 
 - (void)bannerAdDidImpression:(MATBannerAd *)bannerAd {
@@ -163,6 +178,7 @@ static NSString *MATAdTypeDes(NSString *placementId, NSString * _Nullable errorM
 
 - (void)bannerAd:(MATBannerAd *)bannerAd showFailWithError:(NSError *)error {
     [[MaticooAds shareSDK] adapterEventReportWithEventName:@"adapter_show_failed" des:MATAdTypeDes(_placementId, error.localizedDescription)];
+    [_adEventDelegate didFailToPresentWithError:error];
 }
 
 - (void)bannerAdDismissed:(MATBannerAd *)bannerAd {
