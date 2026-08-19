@@ -24,14 +24,28 @@ static NSString *MATAdTypeDes(NSString *placementId, NSString * _Nullable errorM
 
   /// The ad event delegate to forward ad rendering events to the Google Mobile Ads SDK.
   id<GADMediationInterstitialAdEventDelegate> _adEventDelegate;
-    
-    MATInterstitialAd *_interstitial;
+
     NSString *_placementId;
 }
-
+/// load 在主线程写，GMA 可能在其它线程读 present / isReady。读写必须同锁。
+@property (nonatomic, strong) MATInterstitialAd *interstitial;
 @end
 
 @implementation MaticooCustomEventInterstitial
+
+@synthesize interstitial = _interstitial;
+
+- (MATInterstitialAd *)interstitial {
+    @synchronized (self) {
+        return _interstitial;
+    }
+}
+
+- (void)setInterstitial:(MATInterstitialAd *)interstitial {
+    @synchronized (self) {
+        _interstitial = interstitial;
+    }
+}
 
 #pragma mark GADCustomEventInterstitial implementation
 
@@ -45,12 +59,9 @@ static NSString *MATAdTypeDes(NSString *placementId, NSString * _Nullable errorM
         NSError *error = [NSError errorWithDomain:@"com.google.zmaticoo" code:100 userInfo:@{NSLocalizedDescriptionKey: @"zmaticoo appkey is null"}];
         completionHandler(error);
     } else {
-        // COPPA
-        NSNumber *childDirected = GADMobileAds.sharedInstance.requestConfiguration.tagForChildDirectedTreatment;
-        if (childDirected != nil) {
-            [[MaticooAds shareSDK] setIsAgeRestrictedUser:childDirected.boolValue];
-        }
+        [MaticooCustomExtras applyAdMobAgeRestrictedTreatment];
 
+        [MaticooCustomExtras applyAdMobGlobalVideoMute];
         [[MaticooAds shareSDK] setMediationName:@"admob"];
         [[MaticooAds shareSDK] initSDK:appkey onSuccess:^{
             completionHandler(nil);
@@ -111,20 +122,27 @@ static NSString *MATAdTypeDes(NSString *placementId, NSString * _Nullable errorM
         return;
     }
     _placementId = adUnit;
+    NSDictionary *extraMap = [MaticooCustomExtras loadExtraMapFromExtras:adConfiguration.extras];
+    NSNumber *isMuted = [MaticooCustomExtras mutedFromLocalExtra:extraMap];
     [[MaticooAds shareSDK] adapterEventReportWithEventName:@"adapter_load" des:MATAdTypeDes(_placementId, nil)];
     dispatch_async(dispatch_get_main_queue(), ^{
-        self->_interstitial = [[MATInterstitialAd alloc] initWithPlacementID:adUnit];
-        self->_interstitial.delegate = self;
-        [self->_interstitial loadAd];
+        MATInterstitialAd *interstitial = [[MATInterstitialAd alloc] initWithPlacementID:adUnit];
+        interstitial.delegate = self;
+        if (isMuted != nil) {
+            interstitial.videoMute = isMuted.boolValue;
+        }
+        self.interstitial = interstitial;
+        [interstitial loadAdExtraMap:extraMap];
     });
 }
 
 #pragma mark GADMediationInterstitialAd implementation
 
 - (void)presentFromViewController:(UIViewController *)viewController {
-    if (_interstitial && _interstitial.isReady) {
+    MATInterstitialAd *interstitial = self.interstitial;
+    if (interstitial && interstitial.isReady) {
         [[MaticooAds shareSDK] adapterEventReportWithEventName:@"adapter_show" des:MATAdTypeDes(_placementId, nil)];
-        [_interstitial showAdFromViewController:viewController];
+        [interstitial showAdFromViewController:viewController];
     } else {
         [[MaticooAds shareSDK] adapterEventReportWithEventName:@"adapter_show_failed" des:MATAdTypeDes(_placementId, @"ad is not ready")];
         NSError *error = [NSError errorWithDomain:@"com.google.zmaticoo" code:30101 userInfo:@{NSLocalizedDescriptionKey: @"Interstitial ad is not ready"}];
@@ -173,5 +191,14 @@ static NSString *MATAdTypeDes(NSString *placementId, NSString * _Nullable errorM
 - (void)interstitialAdWillClose:(MATInterstitialAd *)interstitialAd {}
 - (void)interstitialAdDidSkip:(MATInterstitialAd *)interstitialAd {}
 - (void)interstitialAdEndCardShow:(MATInterstitialAd *)interstitialAd {}
+
+- (void)dealloc {
+    MATInterstitialAd *ad = nil;
+    @synchronized (self) {
+        ad = _interstitial;
+        _interstitial = nil;
+    }
+    ad.delegate = nil;
+}
 
 @end

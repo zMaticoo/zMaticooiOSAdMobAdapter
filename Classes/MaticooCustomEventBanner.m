@@ -27,9 +27,6 @@ static NSString *MATAdTypeDes(NSString *placementId, NSString * _Nullable errorM
 }
 
 @interface MaticooCustomEventBanner () <GADMediationAdapter, GADMediationBannerAd, MATBannerAdDelegate> {
-    /// The Maticoo banner ad.
-    MATBannerAd *_bannerAd;
-
     /// The completion handler to call when the ad loading succeeds or fails.
     GADMediationBannerLoadCompletionHandler _loadCompletionHandler;
 
@@ -38,9 +35,25 @@ static NSString *MATAdTypeDes(NSString *placementId, NSString * _Nullable errorM
 
     NSString *_placementId;
 }
+/// load 在主线程写，GMA 可能在其它线程读 `-view` / dealloc。ARC 并发读写 nonatomic strong 会读到哨兵 0x400000000000bad0。
+@property (nonatomic, strong) MATBannerAd *bannerAd;
 @end
 
 @implementation MaticooCustomEventBanner
+
+@synthesize bannerAd = _bannerAd;
+
+- (MATBannerAd *)bannerAd {
+    @synchronized (self) {
+        return _bannerAd;
+    }
+}
+
+- (void)setBannerAd:(MATBannerAd *)bannerAd {
+    @synchronized (self) {
+        _bannerAd = bannerAd;
+    }
+}
 
 #pragma mark - GADMediationAdapter
 
@@ -51,11 +64,7 @@ static NSString *MATAdTypeDes(NSString *placementId, NSString * _Nullable errorM
         NSError *error = [NSError errorWithDomain:@"com.google.zmaticoo" code:100 userInfo:@{NSLocalizedDescriptionKey: @"zmaticoo appkey is null"}];
         completionHandler(error);
     } else {
-        // COPPA
-        NSNumber *childDirected = GADMobileAds.sharedInstance.requestConfiguration.tagForChildDirectedTreatment;
-        if (childDirected != nil) {
-            [[MaticooAds shareSDK] setIsAgeRestrictedUser:childDirected.boolValue];
-        }
+        [MaticooCustomExtras applyAdMobAgeRestrictedTreatment];
 
         [[MaticooAds shareSDK] setMediationName:@"admob"];
         [[MaticooAds shareSDK] initSDK:appkey onSuccess:^{
@@ -116,38 +125,41 @@ static NSString *MATAdTypeDes(NSString *placementId, NSString * _Nullable errorM
     [[MaticooAds shareSDK] adapterEventReportWithEventName:@"adapter_load" des:MATAdTypeDes(_placementId, nil)];
 
     dispatch_main_MATAdapter_ASYNC_safe(^{
-        self->_bannerAd = [[MATBannerAd alloc] initWithPlacementID:adUnit];
-        self->_bannerAd.delegate = self;
-        self->_bannerAd.frame = CGRectMake(0, 0,
-                                           adConfiguration.adSize.size.width,
-                                           adConfiguration.adSize.size.height);
+        MATBannerAd *bannerAd = [[MATBannerAd alloc] initWithPlacementID:adUnit];
+        bannerAd.delegate = self;
+        bannerAd.frame = CGRectMake(0, 0,
+                                    adConfiguration.adSize.size.width,
+                                    adConfiguration.adSize.size.height);
 
         id extras = adConfiguration.extras;
         if ([extras isKindOfClass:[MaticooCustomExtras class]]) {
             id le = ((MaticooCustomExtras *)extras).localExtra;
             NSDictionary *localExtra = [le isKindOfClass:[NSDictionary class]] ? le : nil;
             if (localExtra) {
-                self->_bannerAd.localExtra = localExtra;
+                bannerAd.localExtra = localExtra;
                 id canCloseObj = localExtra[@"can_close_ad"];
                 if ([canCloseObj isKindOfClass:[NSNumber class]]) {
-                    self->_bannerAd.canCloseAd = [(NSNumber *)canCloseObj boolValue];
+                    bannerAd.canCloseAd = [(NSNumber *)canCloseObj boolValue];
                 } else if ([canCloseObj isKindOfClass:[NSString class]]) {
-                    self->_bannerAd.canCloseAd = [(NSString *)canCloseObj boolValue];
+                    bannerAd.canCloseAd = [(NSString *)canCloseObj boolValue];
                 }
             }
         }
-        [self->_bannerAd loadAd];
+        self.bannerAd = bannerAd;
+        // 上面已把同一份 localExtra 赋给 bannerAd，无需再经 extraMap 传一次。
+        [bannerAd loadAd];
     });
 }
 
 #pragma mark - GADMediationBannerAd
 
 - (nonnull UIView *)view {
-    if (_bannerAd == nil) {
+    MATBannerAd *ad = self.bannerAd;
+    if (ad == nil) {
         UIView *bannerAdNilView = [[UIView alloc] init];
         return bannerAdNilView;
     }
-    return _bannerAd;
+    return ad;
 }
 
 #pragma mark - MATBannerAdDelegate
@@ -191,9 +203,12 @@ static NSString *MATAdTypeDes(NSString *placementId, NSString * _Nullable errorM
 - (void)dealloc {
     MaticooAdMobAdapterDebugLog(@"banner MATBannerAdapter dealloc adapter=%p placementId=%@ thread=%@ main=%d",self, _placementId, [NSThread currentThread], [NSThread isMainThread]);
     [[MaticooAds shareSDK] adapterEventReportWithEventName:@"adapter_destroy" des:MATAdTypeDes(_placementId, nil)];
-    MATBannerAd *ad = _bannerAd;
-    _bannerAd.delegate = nil;
-    _bannerAd = nil;
+    MATBannerAd *ad = nil;
+    @synchronized (self) {
+        ad = _bannerAd;
+        _bannerAd = nil;
+    }
+    ad.delegate = nil;
     if (ad) {
         dispatch_async(dispatch_get_main_queue(), ^{
             [ad destroy];

@@ -22,13 +22,27 @@ static NSString *MATAdTypeDes(NSString *placementId, NSString * _Nullable errorM
     GADMediationRewardedLoadCompletionHandler _loadCompletionHandler;
     id<GADMediationRewardedAdEventDelegate> _adEventDelegate;
 
-    MATRewardedVideoAd *_rewarded;
     NSString *_placementId;
 }
-
+/// load 在主线程写，GMA 可能在其它线程读 present / isReady。读写必须同锁。
+@property (nonatomic, strong) MATRewardedVideoAd *rewarded;
 @end
 
 @implementation MaticooCustomEventRewardedVideo
+
+@synthesize rewarded = _rewarded;
+
+- (MATRewardedVideoAd *)rewarded {
+    @synchronized (self) {
+        return _rewarded;
+    }
+}
+
+- (void)setRewarded:(MATRewardedVideoAd *)rewarded {
+    @synchronized (self) {
+        _rewarded = rewarded;
+    }
+}
 
 + (void)setUpWithConfiguration:(GADMediationServerConfiguration *)configuration
              completionHandler:(GADMediationAdapterSetUpCompletionBlock)completionHandler {
@@ -37,11 +51,9 @@ static NSString *MATAdTypeDes(NSString *placementId, NSString * _Nullable errorM
         NSError *error = [NSError errorWithDomain:@"com.google.zmaticoo" code:100 userInfo:@{NSLocalizedDescriptionKey: @"zmaticoo appkey is null"}];
         completionHandler(error);
     } else {
-        NSNumber *childDirected = GADMobileAds.sharedInstance.requestConfiguration.tagForChildDirectedTreatment;
-        if (childDirected != nil) {
-            [[MaticooAds shareSDK] setIsAgeRestrictedUser:childDirected.boolValue];
-        }
+        [MaticooCustomExtras applyAdMobAgeRestrictedTreatment];
 
+        [MaticooCustomExtras applyAdMobGlobalVideoMute];
         [[MaticooAds shareSDK] setMediationName:@"admob"];
         [[MaticooAds shareSDK] initSDK:appkey onSuccess:^{
             completionHandler(nil);
@@ -95,20 +107,27 @@ static NSString *MATAdTypeDes(NSString *placementId, NSString * _Nullable errorM
         return;
     }
     _placementId = adUnit;
+    NSDictionary *extraMap = [MaticooCustomExtras loadExtraMapFromExtras:adConfiguration.extras];
+    NSNumber *isMuted = [MaticooCustomExtras mutedFromLocalExtra:extraMap];
     [[MaticooAds shareSDK] adapterEventReportWithEventName:@"adapter_load" des:MATAdTypeDes(_placementId, nil)];
     dispatch_async(dispatch_get_main_queue(), ^{
-        self->_rewarded = [[MATRewardedVideoAd alloc] initWithPlacementID:adUnit];
-        self->_rewarded.delegate = self;
-        [self->_rewarded loadAd];
+        MATRewardedVideoAd *rewarded = [[MATRewardedVideoAd alloc] initWithPlacementID:adUnit];
+        rewarded.delegate = self;
+        if (isMuted != nil) {
+            rewarded.videoMute = isMuted.boolValue;
+        }
+        self.rewarded = rewarded;
+        [rewarded loadAdExtraMap:extraMap];
     });
 }
 
 #pragma mark - GADMediationRewardedAd
 
 - (void)presentFromViewController:(UIViewController *)viewController {
-    if (_rewarded && _rewarded.isReady) {
+    MATRewardedVideoAd *rewarded = self.rewarded;
+    if (rewarded && rewarded.isReady) {
         [[MaticooAds shareSDK] adapterEventReportWithEventName:@"adapter_show" des:MATAdTypeDes(_placementId, nil)];
-        [_rewarded showAdFromViewController:viewController];
+        [rewarded showAdFromViewController:viewController];
     } else {
         [[MaticooAds shareSDK] adapterEventReportWithEventName:@"adapter_show_failed" des:MATAdTypeDes(_placementId, @"ad is not ready")];
         NSError *error = [NSError errorWithDomain:@"com.google.zmaticoo" code:30101 userInfo:@{NSLocalizedDescriptionKey: @"Rewarded ad is not ready"}];
@@ -185,6 +204,15 @@ static NSString *MATAdTypeDes(NSString *placementId, NSString * _Nullable errorM
 
 - (void)rewardedVideoAdEndCardShow:(MATRewardedVideoAd *)rewardedVideoAd {
     (void)rewardedVideoAd;
+}
+
+- (void)dealloc {
+    MATRewardedVideoAd *ad = nil;
+    @synchronized (self) {
+        ad = _rewarded;
+        _rewarded = nil;
+    }
+    ad.delegate = nil;
 }
 
 @end

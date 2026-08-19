@@ -32,7 +32,6 @@ static NSString *MATAdTypeDes(NSString *placementId, NSString * _Nullable errorM
 }
 
 @interface MaticooCustomEventNative () <MATNativeAdDelegate, MATVideoLifecycleDelegate> {
-    MATNativeAd *_nativeAd;
     GADMediationNativeLoadCompletionHandler _loadCompletionHandler;
     id<GADMediationNativeAdEventDelegate> _adEventDelegate;
     NSString *_placementId;
@@ -49,9 +48,25 @@ static NSString *MATAdTypeDes(NSString *placementId, NSString * _Nullable errorM
     MATAdChoicesView *_mappedAdChoicesView;
     BOOL _useImageSelfRender;
 }
+/// load 在主线程写，GMA 可能在其它线程读 hasVideoContent / didRenderInView / dealloc。读写必须同锁。
+@property (nonatomic, strong) MATNativeAd *nativeAd;
 @end
 
 @implementation MaticooCustomEventNative
+
+@synthesize nativeAd = _nativeAd;
+
+- (MATNativeAd *)nativeAd {
+    @synchronized (self) {
+        return _nativeAd;
+    }
+}
+
+- (void)setNativeAd:(MATNativeAd *)nativeAd {
+    @synchronized (self) {
+        _nativeAd = nativeAd;
+    }
+}
 
 #pragma mark - GADMediationAdapter
 
@@ -64,10 +79,7 @@ static NSString *MATAdTypeDes(NSString *placementId, NSString * _Nullable errorM
         completionHandler(error);
         return;
     }
-    NSNumber *childDirected = GADMobileAds.sharedInstance.requestConfiguration.tagForChildDirectedTreatment;
-    if (childDirected != nil) {
-        [[MaticooAds shareSDK] setIsAgeRestrictedUser:childDirected.boolValue];
-    }
+    [MaticooCustomExtras applyAdMobAgeRestrictedTreatment];
     [[MaticooAds shareSDK] setMediationName:@"admob"];
     [[MaticooAds shareSDK] initSDK:appkey onSuccess:^{
         completionHandler(nil);
@@ -133,12 +145,22 @@ static NSString *MATAdTypeDes(NSString *placementId, NSString * _Nullable errorM
             }
         }
     }
+    NSDictionary *extraMap = [MaticooCustomExtras loadExtraMapFromExtras:adConfiguration.extras];
     [[MaticooAds shareSDK] adapterEventReportWithEventName:@"adapter_load"
                                                        des:MATAdTypeDes(_placementId, nil)];
+    NSNumber *startMuted = [MaticooCustomExtras mutedFromLocalExtra:extraMap];
     dispatch_async(dispatch_get_main_queue(), ^{
-        self->_nativeAd = [[MATNativeAd alloc] initWithPlacementID:adUnit];
-        self->_nativeAd.delegate = self;
-        [self->_nativeAd loadAd];
+        MATNativeAd *nativeAd = [[MATNativeAd alloc] initWithPlacementID:adUnit];
+        nativeAd.delegate = self;
+        if (startMuted != nil) {
+            MATVideoOptions *matVideoOpts = [[MATVideoOptions alloc] init];
+            matVideoOpts.startMuted = startMuted.boolValue;
+            MATNativeAdOptions *matNativeOpts = [[MATNativeAdOptions alloc] init];
+            matNativeOpts.videoOptions = matVideoOpts;
+            [nativeAd setNativeAdOptions:matNativeOpts];
+        }
+        self.nativeAd = nativeAd;
+        [nativeAd loadAdExtraMap:extraMap];
     });
 }
 
@@ -158,7 +180,7 @@ static NSString *MATAdTypeDes(NSString *placementId, NSString * _Nullable errorM
 - (UIView *)mediaView { return _mappedMediaView; }
 - (UIView *)adChoicesView { return _mappedAdChoicesView; }
 - (BOOL)hasVideoContent {
-    MATMediaContent *media = _nativeAd.nativeElements.mediaContent;
+    MATMediaContent *media = self.nativeAd.nativeElements.mediaContent;
     if (media.hasVideoContent) {
         return YES;
     }
@@ -169,7 +191,7 @@ static NSString *MATAdTypeDes(NSString *placementId, NSString * _Nullable errorM
 }
 
 - (CGFloat)mediaContentAspectRatio {
-    MATMediaContent *media = _nativeAd.nativeElements.mediaContent;
+    MATMediaContent *media = self.nativeAd.nativeElements.mediaContent;
     if (media.hasVideoContent) {
         return media.aspectRatio;
     }
@@ -178,7 +200,7 @@ static NSString *MATAdTypeDes(NSString *placementId, NSString * _Nullable errorM
     }
     return 0;
 }
-- (NSTimeInterval)duration { return _nativeAd.nativeElements.mediaContent.duration; }
+- (NSTimeInterval)duration { return self.nativeAd.nativeElements.mediaContent.duration; }
 
 - (BOOL)handlesUserClicks      { return YES; }
 - (BOOL)handlesUserImpressions { return YES; }
@@ -194,9 +216,9 @@ static NSString *MATAdTypeDes(NSString *placementId, NSString * _Nullable errorM
     }
     [[MaticooAds shareSDK] adapterEventReportWithEventName:@"adapter_show"
                                                        des:MATAdTypeDes(_placementId, nil)];
-    [_nativeAd registerViewForInteraction:view
-                                mediaView:(MATMediaView *)_mappedMediaView
-                           clickableViews:clickables];
+    [self.nativeAd registerViewForInteraction:view
+                                    mediaView:(MATMediaView *)_mappedMediaView
+                               clickableViews:clickables];
 }
 
 - (void)didUntrackView:(UIView *)view {
@@ -206,7 +228,8 @@ static NSString *MATAdTypeDes(NSString *placementId, NSString * _Nullable errorM
 #pragma mark - Asset mapping
 
 - (void)admob_mapElementsAndComplete {
-    MATNativeAdElements *e = _nativeAd.nativeElements;
+    MATNativeAd *nativeAd = self.nativeAd;
+    MATNativeAdElements *e = nativeAd.nativeElements;
     _mappedHeadline = e.headline ?: @"";
     _mappedBody = e.body ?: @"";
     _mappedCallToAction = e.callToAction ?: @"";
@@ -243,7 +266,7 @@ static NSString *MATAdTypeDes(NSString *placementId, NSString * _Nullable errorM
     _mappedMediaView = mv;
 
     _mappedAdChoicesView = [[MATAdChoicesView alloc] init];
-    [_mappedAdChoicesView setNativeAd:_nativeAd];
+    [_mappedAdChoicesView setNativeAd:nativeAd];
 
     [[MaticooAds shareSDK] adapterEventReportWithEventName:@"adapter_load_success"
                                                        des:MATAdTypeDes(_placementId, nil)];
@@ -324,9 +347,12 @@ static NSString *MATAdTypeDes(NSString *placementId, NSString * _Nullable errorM
     MaticooAdMobAdapterDebugLog(@"native MaticooCustomEventNative dealloc adapter=%p placementId=%@", self, _placementId);
     [[MaticooAds shareSDK] adapterEventReportWithEventName:@"adapter_destroy"
                                                        des:MATAdTypeDes(_placementId, nil)];
-    MATNativeAd *ad = _nativeAd;
-    _nativeAd.delegate = nil;
-    _nativeAd = nil;
+    MATNativeAd *ad = nil;
+    @synchronized (self) {
+        ad = _nativeAd;
+        _nativeAd = nil;
+    }
+    ad.delegate = nil;
     if (ad) {
         dispatch_async(dispatch_get_main_queue(), ^{
             [ad destroy];

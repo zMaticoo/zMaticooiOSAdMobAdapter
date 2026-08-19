@@ -8,7 +8,7 @@
 
 Pod::Spec.new do |s|
   s.name             = 'AdMobzMaticooAdapter'
-  s.version          = '2.2.0'
+  s.version          = '2.3.0'
   s.summary          = 'A short description of AdMobzMaticooAdapter.'
 
 # This description is used to generate tags and improve search results.
@@ -43,7 +43,7 @@ This is zMaticoo iOS SDK AdMob Adaper.
 
   #spec.license      = "MIT (example)"
    s.dependency 'Google-Mobile-Ads-SDK'
-   s.dependency 'zMaticoo'
+   s.dependency 'zMaticoo', '>= 2.3.0'
    s.static_framework = true
 
 # ――― Source Code ―――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――― #
