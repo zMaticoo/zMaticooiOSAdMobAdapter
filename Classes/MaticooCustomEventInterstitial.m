@@ -72,12 +72,12 @@ static NSString *MATAdTypeDes(NSString *placementId, NSString * _Nullable errorM
 }
 
 + (GADVersionNumber)adSDKVersion {
-  GADVersionNumber version = {2, 2, 0};
+  GADVersionNumber version = {2, 3, 0};
   return version;
 }
 
 + (GADVersionNumber)adapterVersion {
-    GADVersionNumber version = {2, 2, 0};
+    GADVersionNumber version = {2, 3, 0};
     return version;
 }
 
